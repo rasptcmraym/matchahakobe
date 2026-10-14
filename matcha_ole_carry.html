@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>抹茶オレを運べ（仮題）</title>
+<!--
+  使用ライブラリとライセンス（MIT License）
+  - Three.js 0.160.0 : Copyright 2010-2023 Three.js Authors / https://github.com/mrdoob/three.js
+  - cannon-es 0.20.0 : Copyright (c) 2015 cannon.js Authors / https://github.com/pmndrs/cannon-es
+  いずれもMIT Licenseの全文は各配布元のLICENSEを参照。配信画面または概要欄に表記すること（設計書7-3）。
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+  }
+}
+</script>
+<style>
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b2a22; color: #f4efe2;
+    font-family: "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; user-select: none; -webkit-user-select: none; }
+  #scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+  .ui { position: fixed; z-index: 2; pointer-events: none; }
+  .ui button, .ui .btn { pointer-events: auto; }
+  .btn { font: inherit; font-weight: 700; color: #1b2a22; background: #e8dcc0; border: 0; border-radius: 12px;
+    padding: 12px 18px; min-height: 44px; min-width: 44px; cursor: pointer; }
+  .btn.primary { background: #9cc26b; }
+  .btn.small { padding: 8px 12px; font-size: 14px; min-height: 36px; }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+
+  #hud { top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  #hud-box { display: flex; flex-wrap: wrap; gap: 6px 14px; background: rgba(0, 0, 0, 0.45); padding: 8px 12px;
+    border-radius: 10px; font-size: clamp(15px, 2.6vw, 22px); font-weight: 700; }
+  #hud-box span { white-space: nowrap; }
+
+  #gauge { right: 14px; top: 50%; transform: translateY(-50%); width: 34px; text-align: center; font-size: 14px; font-weight: 700; }
+  #gauge-track { position: relative; height: 40vh; width: 26px; margin: 6px auto 0; border: 2px solid #f4efe2;
+    border-radius: 13px; background: rgba(0, 0, 0, 0.4); overflow: hidden; }
+  #gauge-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: #c9d88a; }
+
+  #hint { left: 0; right: 0; bottom: 108px; text-align: center; font-size: 14px; opacity: 0.85; text-shadow: 0 1px 4px #000; }
+  #btn-fwd { left: 50%; bottom: 20px; transform: translateX(-50%); width: min(60vw, 240px); min-height: 72px; font-size: 22px; }
+
+  .panel { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(92vw, 460px); box-sizing: border-box;
+    background: rgba(20, 30, 24, 0.88); padding: 20px; border-radius: 16px; text-align: center; line-height: 1.6; }
+  .panel h1 { font-size: clamp(24px, 5vw, 34px); margin: 0 0 8px; }
+  .panel h2 { font-size: clamp(22px, 4.5vw, 30px); margin: 0 0 8px; }
+  .panel p { margin: 6px 0; font-size: 15px; }
+  .levels { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 14px 0; }
+  .levels .btn[aria-pressed="true"] { background: #f4efe2; box-shadow: 0 0 0 3px #9cc26b; }
+  .res { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; text-align: left; font-size: 18px;
+    margin: 12px auto; max-width: 300px; }
+  .res dt { opacity: 0.8; }
+  .res dd { margin: 0; font-weight: 700; text-align: right; }
+
+  #banner { left: 50%; top: 40%; transform: translate(-50%, -50%); font-size: clamp(32px, 8vw, 64px); font-weight: 900;
+    white-space: nowrap; text-shadow: 0 4px 18px #000; }
+
+  /* 配信用モード：文字・ボタンを消し、ゲーム画面のみ表示 */
+  body.broadcast .ui { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<header class="ui" id="hud">
+  <div id="hud-box">
+    <span id="hud-level">レベル1</span>
+    <span id="hud-time">残り 60.0 秒</span>
+    <span id="hud-hits">接触 0 回</span>
+  </div>
+  <button class="btn small" id="btn-restart" type="button">リスタート (R)</button>
+</header>
+
+<div class="ui" id="gauge">
+  <span>ゆれ</span>
+  <div id="gauge-track"><div id="gauge-fill"></div></div>
+</div>
+
+<p class="ui" id="hint">画面の左右をタップ・長押しで傾ける ／ H：配信用モード</p>
+<button class="ui btn primary" id="btn-fwd" type="button">前進 ↑</button>
+
+<section class="ui panel" id="panel-ready">
+  <h1>抹茶オレを運べ</h1>
+  <p>抹茶オレを載せたお盆を運び、白いゴールラインを越えよう。</p>
+  <p>制限時間は60秒。お盆から抹茶オレが落ちたら失敗です。</p>
+  <div class="levels">
+    <button class="btn lv" type="button" data-level="1">レベル1 (1)</button>
+    <button class="btn lv" type="button" data-level="2">レベル2 (2)</button>
+    <button class="btn lv" type="button" data-level="3">レベル3 (3)</button>
+  </div>
+  <button class="btn primary" id="btn-start" type="button">スタート (Enter)</button>
+</section>
+
+<section class="ui panel" id="panel-result" hidden>
+  <h2 id="res-title">結果</h2>
+  <dl class="res">
+    <dt>挑戦レベル</dt><dd id="res-level"></dd>
+    <dt>ゴール</dt><dd id="res-goal"></dd>
+    <dt>残り時間</dt><dd id="res-time"></dd>
+    <dt>接触回数</dt><dd id="res-hits"></dd>
+    <dt>スコア</dt><dd id="res-score"></dd>
+  </dl>
+  <div class="levels">
+    <button class="btn lv" type="button" data-level="1">レベル1 (1)</button>
+    <button class="btn lv" type="button" data-level="2">レベル2 (2)</button>
+    <button class="btn lv" type="button" data-level="3">レベル3 (3)</button>
+  </div>
+  <button class="btn primary" id="btn-retry" type="button">もう一度（リスタート）</button>
+</section>
+
+<div class="ui" id="banner" hidden></div>
+
+<script type="module">
+import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
+
+// ===== 定数 =====
+// 「仮」は配信前に調整する初期値（設計書10章・12章）
+const FIXED = 1 / 60;             // 物理の固定タイムステップ（秒）
+const PLAY_TIME = 60;             // 制限時間（秒）
+const COURSE_LEN = 40;            // ゴールまでの距離。ゴールラインは z = -COURSE_LEN
+const GRAVITY = 9.82;
+const TRAY = { w: 1.2, h: 0.2, d: 1.4, mass: 2, y: 1.0 };   // 仮：お盆
+const CUP = { r: 0.3, h: 0.6, mass: 0.5 };                   // 仮：抹茶オレ（カップ）
+const FRICTION_TRAY_CUP = 0.6;    // 仮：この摩擦を超えると抹茶オレが滑る
+const FORWARD_SPEED = 2.5;        // 仮：前進の速さ（単位/秒）
+const LATERAL_SPEED = 1.5;        // 仮：左右移動の速さ（要確認：設計書に横移動の定義なし）
+const MAX_TILT = 0.35;            // 仮：最大の傾き（rad、約20度）
+const VEL_GAIN = 3;               // 仮：お盆の速度追従（大きすぎると抹茶オレが滑る）
+const HEIGHT_GAIN = 80;           // 仮：お盆の高さ保持
+const HEIGHT_DAMP = 12;           // 仮：お盆の上下の減衰
+const TILT_GAIN = 60;             // 仮：お盆の姿勢の戻しバネ
+const BUMP_UP = 1.5;              // 仮：障害物に当たったときの跳ね上がり速度
+const GAUGE_TILT_FULL = 0.5;      // 仮：ゆれゲージ満タンの傾き（rad）
+const GAUGE_SPIN_FULL = 8;        // 仮：ゆれゲージ満タンの角速度
+const SCORE_GOAL = 100;
+const SCORE_PER_SEC = 5;
+const SCORE_NO_HIT = 200;
+
+// 難易度（設計書10章の表）
+const LEVELS = {
+  1: { label: 'レベル1', halfW: 3.0, tiltRate: 0.8, tiltDamp: 9,   speed: 0.6, wind: 0 },  // 仮
+  2: { label: 'レベル2', halfW: 3.0, tiltRate: 1.4, tiltDamp: 5,   speed: 1.0, wind: 2 },  // 仮
+  3: { label: 'レベル3', halfW: 1.8, tiltRate: 2.2, tiltDamp: 3.5, speed: 1.5, wind: 6 },  // 仮
+};
+
+// 障害物の配置（固定）。spin：回転の角速度、slide：左右往復、bob：上下往復（振幅・角振動数は speed 倍される）
+const OBSTACLES = {
+  1: [
+    { size: [3, 1, 1.2],       pos: [-1.5, 0.5, -8] },            // 低い段差（左寄り）
+    { size: [1.2, 1.2, 1.2],   pos: [1.2, 0.6, -16] },            // 固定ブロック
+    { size: [3, 1, 1.2],       pos: [1.5, 0.5, -24] },            // 低い段差（右寄り）
+    { size: [1.2, 1.2, 1.2],   pos: [-1.2, 0.6, -32] },           // 固定ブロック
+  ],
+  2: [
+    { size: [5, 0.6, 0.5],     pos: [0, 1, -10], spin: 1.0 },     // 回転バー
+    { size: [2.2, 0.6, 1.2],   pos: [0, 1, -20], slide: { amp: 0.8, omega: 1.2 } }, // 左右に動く板
+    { size: [5, 0.6, 0.5],     pos: [0, 1, -30], spin: -0.9 },    // 回転バー
+  ],
+  3: [
+    { size: [3.2, 0.6, 0.5],   pos: [0, 1, -8], spin: 1.6 },      // 回転バー（狭い通路）
+    { size: [3.2, 0.6, 0.5],   pos: [0, 1, -14], spin: -1.8 },    // 回転バー
+    { size: [1.6, 0.3, 1.0],   pos: [0, 1, -20], bob: { amp: 0.45, omega: 2.0 } }, // 上下する板
+    { size: [1.0, 1, 1.2],     pos: [-1.3, 0.5, -28] },           // 狭い通路の壁（左）
+    { size: [1.0, 1, 1.2],     pos: [1.3, 0.5, -28] },            // 狭い通路の壁（右）
+    { size: [2, 0.6, 1.2],     pos: [0, 1, -35], slide: { amp: 0.6, omega: 1.5 } }, // 左右に動く板
+  ],
+};
+
+// ===== 状態 =====
+let level = 1;
+let state = 'ready';              // ready / play / success / fail / result
+let playTime = 0;                 // プレイ中の経過時間（秒）
+let endTimer = 0;                 // 成功・失敗の演出時間（秒）
+let hits = 0;                     // 障害物への接触回数
+let touching = new Set();         // 今この瞬間に触れている障害物
+let tiltTarget = 0;               // 傾きの目標（rad）
+let gauge = 0;                    // ゆれゲージの表示値（0〜1）
+let result = null;
+
+const keys = new Set();
+const touch = { x: 0, fwd: 0 };
+
+// ===== 描画 =====
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1b2a22);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+camera.position.set(0, 32, 22);
+camera.lookAt(0, 0, -16);
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+sun.position.set(5, 12, 6);
+scene.add(sun);
+const courseGroup = new THREE.Group();
+scene.add(courseGroup);
+const windGroup = new THREE.Group();          // 横風のエフェクト（見た目だけ）
+scene.add(windGroup);
+const streaks = [];
+for (let i = 0; i < 12; i++) {
+  const s = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 1.2),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
+  s.position.set(0, 1.3, 0);
+  windGroup.add(s);
+  streaks.push(s);
+}
+
+// ===== 物理 =====
+const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -GRAVITY, 0) });
+world.solver.iterations = 10;
+const trayMat = new CANNON.Material('tray');
+const cupMat = new CANNON.Material('cup');
+const obstacleMat = new CANNON.Material('obstacle');
+world.addContactMaterial(new CANNON.ContactMaterial(trayMat, cupMat, { friction: FRICTION_TRAY_CUP, restitution: 0 }));
+world.addContactMaterial(new CANNON.ContactMaterial(trayMat, obstacleMat, { friction: 0.3, restitution: 0.1 }));
+
+const UP = new CANNON.Vec3(0, 1, 0);
+const _rel = new CANNON.Vec3();
+const _loc = new CANNON.Vec3();
+const _q = new CANNON.Quaternion();
+let tray, cup, trayMesh, cupMesh;
+let obstacles = [];               // { body, mesh, motion }
+let obstacleBodies = new Set();
+
+// ===== 小さな補助関数 =====
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const approach = (a, b, d) => a + clamp(b - a, -d, d);
+const keyDown = (...codes) => codes.some((c) => keys.has(c));
+const inputX = () => clamp((keyDown('ArrowRight', 'KeyD') ? 1 : 0) - (keyDown('ArrowLeft', 'KeyA') ? 1 : 0) + touch.x, -1, 1);
+const inputFwd = () => clamp((keyDown('ArrowUp', 'KeyW') ? 1 : 0) + touch.fwd, 0, 1);
+
+function boxMesh(size, color) {
+  return new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.6 }));
+}
+
+function addStaticBox(size, pos, color) {
+  const body = new CANNON.Body({ type: CANNON.Body.STATIC, material: obstacleMat,
+    shape: new CANNON.Box(new CANNON.Vec3(size[0] / 2, size[1] / 2, size[2] / 2)) });
+  body.position.set(pos[0], pos[1], pos[2]);
+  world.addBody(body);
+  const mesh = boxMesh(size, color);
+  mesh.position.set(pos[0], pos[1], pos[2]);
+  courseGroup.add(mesh);
+}
+
+function buildFloorAndWalls(halfW) {
+  const zMid = -COURSE_LEN / 2;
+  const zHalf = COURSE_LEN / 2 + 4;
+  addStaticBox([40, 0.2, 2 * zHalf], [0, -0.1, zMid], 0x2f4a36);
+  addStaticBox([0.4, 3, 2 * zHalf], [-(halfW + 0.2), 1.5, zMid], 0x6b5b4b);
+  addStaticBox([0.4, 3, 2 * zHalf], [halfW + 0.2, 1.5, zMid], 0x6b5b4b);
+  addStaticBox([2 * halfW + 0.8, 3, 0.4], [0, 1.5, -(COURSE_LEN + 4)], 0x6b5b4b);
+  const goal = new THREE.Mesh(new THREE.BoxGeometry(2 * halfW, 0.02, 0.4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  goal.position.set(0, 0.01, -COURSE_LEN);
+  courseGroup.add(goal);
+}
+
+function makeCupMesh() {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(CUP.r, CUP.r, CUP.h, 24),
+    new THREE.MeshStandardMaterial({ color: 0x6b8f3a, roughness: 0.5 }));
+  const top = new THREE.Mesh(new THREE.CircleGeometry(CUP.r * 0.92, 24),
+    new THREE.MeshStandardMaterial({ color: 0xf5f0e6, roughness: 0.4 }));
+  top.rotation.x = -Math.PI / 2;
+  top.position.y = CUP.h / 2 + 0.005;
+  group.add(body, top);
+  return group;
+}
+
+function buildTrayAndCup() {
+  tray = new CANNON.Body({ mass: TRAY.mass, material: trayMat, linearDamping: 0.02,
+    shape: new CANNON.Box(new CANNON.Vec3(TRAY.w / 2, TRAY.h / 2, TRAY.d / 2)) });
+  tray.position.set(0, TRAY.y, 0);
+  tray.angularFactor.set(1, 0, 1);      // 向きは横に回さない（ヨー回転を固定）
+  world.addBody(tray);
+  trayMesh = boxMesh([TRAY.w, TRAY.h, TRAY.d], 0x9c6b3c);
+  courseGroup.add(trayMesh);
+
+  cup = new CANNON.Body({ mass: CUP.mass, material: cupMat, angularDamping: 0.05,
+    shape: new CANNON.Cylinder(CUP.r, CUP.r, CUP.h, 16) });
+  cup.position.set(0, TRAY.y + TRAY.h / 2 + CUP.h / 2, 0);
+  world.addBody(cup);
+  cupMesh = makeCupMesh();
+  courseGroup.add(cupMesh);
+}
+
+// 障害物の動き。spin は角速度、slide/bob は往復運動（速度を直接与える）
+function makeMotion(s, speed) {
+  if (s.spin !== undefined) return { kind: 'spin', w: s.spin * speed };
+  if (s.slide) return { kind: 'slide', amp: s.slide.amp, w: s.slide.omega * speed };
+  if (s.bob) return { kind: 'bob', amp: s.bob.amp, w: s.bob.omega * speed };
+  return null;
+}
+
+function buildObstacles() {
+  const speed = LEVELS[level].speed;
+  obstacles = OBSTACLES[level].map((s) => {
+    const motion = makeMotion(s, speed);
+    const body = new CANNON.Body({ type: motion ? CANNON.Body.KINEMATIC : CANNON.Body.STATIC, material: obstacleMat,
+      shape: new CANNON.Box(new CANNON.Vec3(s.size[0] / 2, s.size[1] / 2, s.size[2] / 2)) });
+    body.position.set(s.pos[0], s.pos[1], s.pos[2]);
+    world.addBody(body);
+    const mesh = boxMesh(s.size, motion ? 0xc0392b : 0x7a7a7a);
+    courseGroup.add(mesh);
+    return { body, mesh, motion };
+  });
+  obstacleBodies = new Set(obstacles.map((o) => o.body));
+}
+
+// 障害物の速度を、現在のプレイ時間から決める（準備中・結果中は止める）
+function animateObstacle(o) {
+  const m = o.motion;
+  if (!m) return;
+  if (state !== 'play') {
+    o.body.velocity.set(0, 0, 0);
+    o.body.angularVelocity.set(0, 0, 0);
+    return;
+  }
+  if (m.kind === 'spin') {
+    o.body.angularVelocity.set(0, m.w, 0);
+    return;
+  }
+  const v = m.amp * m.w * Math.cos(m.w * playTime);
+  if (m.kind === 'slide') o.body.velocity.set(v, 0, 0);
+  else o.body.velocity.set(0, v, 0);
+}
+
+// 設計書の「1ステージ」を作り直す（リスタート・レベル変更時）
+function resetWorld() {
+  world.bodies.slice().forEach((b) => world.removeBody(b));
+  courseGroup.traverse((o) => {          // 作り直すたびにGPUメモリを解放する（連続運転で増えないように）
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) o.material.dispose();
+  });
+  courseGroup.clear();
+  buildFloorAndWalls(LEVELS[level].halfW);
+  buildTrayAndCup();
+  buildObstacles();
+}
+
+// ===== 毎ステップの処理 =====
+// お盆：速度追従と高さ保持（重力は打ち消す）＋傾きの姿勢制御。ゆれは減衰の大きさで変わる
+function applyTrayControl() {
+  const L = LEVELS[level];
+  const active = state === 'play';
+  const ix = active ? inputX() : 0;
+  const fw = active ? inputFwd() : 0;
+  const m = TRAY.mass;
+  const v = tray.velocity;
+  const p = tray.position;
+  const wind = active ? L.wind * (0.6 + 0.4 * Math.sin((Math.PI / 2) * playTime)) : 0;
+  tray.force.set(
+    m * VEL_GAIN * (ix * LATERAL_SPEED - v.x) + wind,
+    m * (GRAVITY + HEIGHT_GAIN * (TRAY.y - p.y) - HEIGHT_DAMP * v.y),
+    m * VEL_GAIN * (-fw * FORWARD_SPEED - v.z)
+  );
+  tiltTarget = approach(tiltTarget, -ix * MAX_TILT, L.tiltRate * FIXED);
+  const up = tray.quaternion.vmult(UP);
+  const roll = Math.atan2(-up.x, up.y);
+  const pitch = Math.atan2(up.z, up.y);
+  const w = tray.angularVelocity;
+  tray.torque.set(
+    -TILT_GAIN * pitch - L.tiltDamp * w.x,
+    0,
+    TILT_GAIN * (tiltTarget - roll) - L.tiltDamp * w.z
+  );
+}
+
+// 障害物に触れた瞬間を数える（お盆のみ。落下判定には使わない）
+function updateContacts() {
+  const now = new Set();
+  for (const c of world.contacts) {
+    const other = c.bi === tray ? c.bj : c.bj === tray ? c.bi : null;
+    if (other && obstacleBodies.has(other)) now.add(other);
+  }
+  for (const b of now) {
+    if (touching.has(b)) continue;
+    hits++;
+    tray.velocity.y += BUMP_UP;
+  }
+  touching = now;
+}
+
+// 抹茶オレがお盆の上にあるか（お盆のローカル座標で判定）
+function cupOffTray() {
+  cup.position.vsub(tray.position, _rel);
+  tray.quaternion.conjugate(_q).vmult(_rel, _loc);
+  return Math.abs(_loc.x) > TRAY.w / 2 || Math.abs(_loc.z) > TRAY.d / 2 || _loc.y < -0.3;
+}
+
+function evaluate() {
+  if (cupOffTray()) return finish(false, 'fall');
+  if (cup.position.z < -COURSE_LEN) return finish(true, 'goal');
+  if (playTime >= PLAY_TIME) return finish(false, 'time');
+}
+
+function finish(goal, reason) {
+  result = { goal, reason, remaining: Math.max(0, PLAY_TIME - playTime), hits, level };
+  state = goal ? 'success' : 'fail';
+  endTimer = 1.5;
+  const text = goal ? 'ゴール！' : reason === 'fall' ? '落下…' : '時間切れ…';
+  const banner = document.getElementById('banner');
+  banner.textContent = text;
+  banner.hidden = false;
+}
+
+// 結果のスコア（設計書4-3）。ゴールできなかった場合は0
+function scoreOf(r) {
+  if (!r.goal) return 0;
+  return SCORE_GOAL + Math.floor(r.remaining) * SCORE_PER_SEC + (r.hits === 0 ? SCORE_NO_HIT : 0);
+}
+
+function physicsStep() {
+  if (state === 'play') playTime += FIXED;
+  obstacles.forEach(animateObstacle);
+  applyTrayControl();
+  world.step(FIXED);
+  updateContacts();
+  if (state === 'play') evaluate();
+  if (state === 'success' || state === 'fail') {
+    endTimer -= FIXED;
+    if (endTimer <= 0) showResult();
+  }
+}
+
+// ===== 画面の更新（描画・HUD） =====
+function syncMesh(mesh, body) {
+  mesh.position.set(body.position.x, body.position.y, body.position.z);
+  mesh.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+}
+
+function updateGauge(dt) {
+  const up = cup.quaternion.vmult(UP);
+  const tilt = Math.acos(clamp(up.y, -1, 1));
+  const raw = Math.min(1, tilt / GAUGE_TILT_FULL + cup.angularVelocity.length() / GAUGE_SPIN_FULL);
+  gauge += (raw - gauge) * Math.min(1, dt * 10);
+  document.getElementById('gauge-fill').style.height = `${gauge * 100}%`;
+}
+
+function updateWind(dt) {
+  const on = state === 'play' && LEVELS[level].wind > 0;
+  windGroup.visible = on;
+  if (!on) return;
+  windGroup.position.z = tray.position.z;
+  const halfW = LEVELS[level].halfW;
+  streaks.forEach((s, i) => {
+    s.position.x += dt * 6;
+    if (s.position.x > halfW) s.position.x = -halfW;
+    s.position.y = 0.8 + (i % 4) * 0.35;
+  });
+}
+
+function updateHud() {
+  const remaining = state === 'play' ? Math.max(0, PLAY_TIME - playTime) : PLAY_TIME;
+  document.getElementById('hud-level').textContent = LEVELS[level].label;
+  document.getElementById('hud-time').textContent = `残り ${remaining.toFixed(1)} 秒`;
+  document.getElementById('hud-hits').textContent = `接触 ${hits} 回`;
+}
+
+function showPanel(name) {
+  document.getElementById('panel-ready').hidden = name !== 'ready';
+  document.getElementById('panel-result').hidden = name !== 'result';
+  document.querySelectorAll('.lv').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.level) === level)));
+}
+
+function showResult() {
+  state = 'result';
+  document.getElementById('banner').hidden = true;
+  document.getElementById('res-title').textContent = result.goal ? 'ゴール成功！' : result.reason === 'fall' ? '失敗（落下）' : '失敗（時間切れ）';
+  document.getElementById('res-level').textContent = LEVELS[result.level].label;
+  document.getElementById('res-goal').textContent = result.goal ? 'あり' : 'なし';
+  document.getElementById('res-time').textContent = `${result.remaining.toFixed(1)} 秒`;
+  document.getElementById('res-hits').textContent = `${result.hits} 回`;
+  document.getElementById('res-score').textContent = `${scoreOf(result)} 点`;
+  showPanel('result');
+}
+
+function render(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  acc += dt;
+  while (acc >= FIXED) {
+    physicsStep();
+    acc -= FIXED;
+  }
+  syncMesh(trayMesh, tray);
+  syncMesh(cupMesh, cup);
+  obstacles.forEach((o) => syncMesh(o.mesh, o.body));
+  updateGauge(dt);
+  updateWind(dt);
+  updateHud();
+  renderer.render(scene, camera);
+  requestAnimationFrame(render);
+}
+
+// ===== 操作 =====
+function startPlay() {
+  resetWorld();
+  state = 'play';
+  playTime = 0;
+  hits = 0;
+  touching = new Set();
+  tiltTarget = 0;
+  gauge = 0;
+  result = null;
+  document.getElementById('banner').hidden = true;
+  showPanel(null);
+}
+
+function setLevel(n) {
+  if (state === 'play' || state === 'success' || state === 'fail') return;
+  level = n;
+  resetWorld();
+  state = 'ready';
+  showPanel('ready');
+}
+
+function toggleBroadcast() {
+  document.body.classList.toggle('broadcast');
+}
+
+function onAction(code) {
+  if (code === 'KeyR') return startPlay();
+  if (code === 'KeyH') return toggleBroadcast();
+  if (code === 'Digit1' || code === 'Digit2' || code === 'Digit3') return setLevel(Number(code.slice(-1)));
+  if ((code === 'Enter' || code === 'Space') && (state === 'ready' || state === 'result')) startPlay();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
+  if (!e.repeat) onAction(e.code);
+  keys.add(e.code);
+});
+document.addEventListener('keyup', (e) => keys.delete(e.code));
+window.addEventListener('blur', () => { keys.clear(); touch.x = 0; touch.fwd = 0; });
+
+// 画面の左右をタップ・長押しで傾ける（ボタン上の操作は除く）
+document.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('button')) return;
+  touch.x = e.clientX < window.innerWidth / 2 ? -1 : 1;
+});
+document.addEventListener('pointerup', () => { touch.x = 0; });
+document.addEventListener('pointercancel', () => { touch.x = 0; });
+
+const fwdBtn = document.getElementById('btn-fwd');
+fwdBtn.addEventListener('pointerdown', () => { touch.fwd = 1; });
+for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) fwdBtn.addEventListener(ev, () => { touch.fwd = 0; });
+
+document.querySelectorAll('.lv').forEach((b) => b.addEventListener('click', () => setLevel(Number(b.dataset.level))));
+document.getElementById('btn-start').addEventListener('click', startPlay);
+document.getElementById('btn-retry').addEventListener('click', startPlay);
+document.getElementById('btn-restart').addEventListener('click', startPlay);
+
+// ===== 起動 =====
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+resetWorld();
+showPanel('ready');
+let last = performance.now();
+let acc = 0;
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
